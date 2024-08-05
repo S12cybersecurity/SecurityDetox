@@ -7,11 +7,10 @@
 #include <deque>
 #include <conio.h>
 #include <sstream>
+#include "Sysmon.h"
 
 #pragma comment(lib, "Psapi.lib")
 #pragma comment(lib, "Wtsapi32.lib")
-
-using namespace std;
 
 // C++ Malware that unload from all the current and future processes some specifyc security libraries 
 // 1. Get all the DLL's loaded injected in the current process
@@ -85,6 +84,15 @@ int main(int argc, char* argv[])
 {
 	// 1. Get all the DLL's loaded injected in the current process
 	deque<string> modules = ListModules();
+	int sysmon = -1;
+	SysmonDetox sysmonDetox;
+	sysmon = sysmonDetox.SysmonDetector();
+	if (sysmon == 0) {
+		cout << "Sysmon not detected" << endl;
+	}
+	else {
+		cout << "Sysmon detected" << endl;
+	}
 
 
 	for (auto& module : modules) {
